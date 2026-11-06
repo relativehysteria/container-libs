@@ -1,9 +1,11 @@
 package manifest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -410,4 +412,89 @@ func TestOCI1CanChangeLayerCompression(t *testing.T) {
 
 	artifact := manifestOCI1FromFixture(t, "ociv1.artifact.json")
 	assert.False(t, artifact.CanChangeLayerCompression(imgspecv1.MediaTypeImageLayerGzip))
+}
+
+func TestNewOCIImageExtendedWithoutHealthcheck(t *testing.T) {
+	image := imgspecv1.Image{
+		Platform: imgspecv1.Platform{
+			Architecture: "amd64",
+			OS:           "linux",
+		},
+		Config: imgspecv1.ImageConfig{
+			User: "1000",
+			Env:  []string{"PATH=/usr/bin"},
+			Cmd:  []string{"my-command"},
+			Labels: map[string]string{
+				"version": "1.0",
+			},
+		},
+		RootFS: imgspecv1.RootFS{
+			Type: "layers",
+		},
+		History: []imgspecv1.History{
+			{CreatedBy: "test build"},
+		},
+	}
+
+	expected, err := json.Marshal(image)
+	require.NoError(t, err)
+
+	extended := NewOCIImageExtended(image, nil)
+
+	actual, err := json.Marshal(extended)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(expected), string(actual))
+}
+
+func TestNewOCIImageExtendedWithHealthcheck(t *testing.T) {
+	image := imgspecv1.Image{
+		Platform: imgspecv1.Platform{
+			Architecture: "amd64",
+			OS:           "linux",
+		},
+		Config: imgspecv1.ImageConfig{
+			User: "1000",
+			Env:  []string{"PATH=/usr/bin"},
+			Cmd:  []string{"my-command"},
+			Labels: map[string]string{
+				"version": "1.0",
+			},
+		},
+		RootFS: imgspecv1.RootFS{
+			Type: "layers",
+		},
+		History: []imgspecv1.History{
+			{CreatedBy: "test build"},
+		},
+	}
+
+	healthcheck := &Schema2HealthConfig{
+		Test:          []string{"CMD-SHELL", "curl -f http://localhost/health"},
+		Interval:      30 * time.Second,
+		Timeout:       5 * time.Second,
+		StartPeriod:   10 * time.Second,
+		StartInterval: 2 * time.Second,
+		Retries:       3,
+	}
+
+	extended := NewOCIImageExtended(image, healthcheck)
+
+	serialized, err := json.Marshal(extended)
+	require.NoError(t, err)
+
+	// Verify that all standard OCI image fields are preserved.
+	var decodedImage imgspecv1.Image
+	require.NoError(t, json.Unmarshal(serialized, &decodedImage))
+	assert.Equal(t, image, decodedImage)
+
+	// Verify that the healthcheck is present in the extended config.
+	var decodedExtended struct {
+		Config struct {
+			Healthcheck *Schema2HealthConfig `json:"Healthcheck"`
+		} `json:"config"`
+	}
+
+	require.NoError(t, json.Unmarshal(serialized, &decodedExtended))
+	assert.Equal(t, healthcheck, decodedExtended.Config.Healthcheck)
 }

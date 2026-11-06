@@ -11,6 +11,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	"encoding/json"
 
 	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -736,4 +737,81 @@ func TestManifestSchema2CanChangeLayerCompression(t *testing.T) {
 		// Some projects like to use squashfs and other unspecified formats for layers; don’t touch those.
 		assert.False(t, m.CanChangeLayerCompression("a completely unknown and quite possibly invalid MIME type"))
 	}
+}
+
+func TestConvertToManifestOCIPreservesHealthcheck(t *testing.T) {
+	// Start with a normal OCI-compatible image config.
+	image := imgspecv1.Image{
+		Platform: imgspecv1.Platform{
+			Architecture: "amd64",
+			OS:           "linux",
+		},
+		Config: imgspecv1.ImageConfig{
+			User: "1000",
+			Env:  []string{"PATH=/usr/bin"},
+			Cmd:  []string{"my-command"},
+			Labels: map[string]string{
+				"version": "1.0",
+			},
+		},
+		RootFS: imgspecv1.RootFS{
+			Type: "layers",
+		},
+		History: []imgspecv1.History{
+			{CreatedBy: "test build"},
+		},
+	}
+
+	// Add a Docker HEALTHCHECK to the config object.
+	healthcheck := &manifest.Schema2HealthConfig{
+		Test:          []string{"CMD-SHELL", "curl -f http://localhost/health"},
+		Interval:      30 * time.Second,
+		Timeout:       5 * time.Second,
+		StartPeriod:   10 * time.Second,
+		StartInterval: 2 * time.Second,
+		Retries:       3,
+	}
+
+	configBlob, err := json.Marshal(image)
+	require.NoError(t, err)
+
+	var topLevel map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(configBlob, &topLevel))
+
+	var config map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(topLevel["config"], &config))
+
+	healthcheckJSON, err := json.Marshal(healthcheck)
+	require.NoError(t, err)
+
+	config["Healthcheck"] = healthcheckJSON
+
+	topLevel["config"], err = json.Marshal(config)
+	require.NoError(t, err)
+
+	configBlob, err = json.Marshal(topLevel)
+	require.NoError(t, err)
+
+	// Build a schema2 manifest around the custom config blob.
+	original := manifestSchema2FromComponentsLikeFixture(configBlob)
+
+	// Convert it directly to OCI.
+	schema2, ok := original.(*manifestSchema2)
+	require.True(t, ok)
+
+	converted, err := schema2.convertToManifestOCI1(context.Background(), nil)
+	require.NoError(t, err)
+
+	convertedConfig, err := converted.ConfigBlob(context.Background())
+	require.NoError(t, err)
+
+	// Check that the standard OCI image fields survived conversion.
+	var convertedImage imgspecv1.Image
+	require.NoError(t, json.Unmarshal(convertedConfig, &convertedImage))
+	assert.Equal(t, image, convertedImage)
+
+	// Check that the Docker HEALTHCHECK extension survived conversion.
+	convertedHealthcheck, err := manifest.Schema2HealthcheckFromConfigBlob(convertedConfig)
+	require.NoError(t, err)
+	assert.Equal(t, healthcheck, convertedHealthcheck)
 }

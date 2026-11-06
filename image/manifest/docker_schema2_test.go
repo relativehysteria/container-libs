@@ -3,6 +3,7 @@ package manifest
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/opencontainers/go-digest"
@@ -287,4 +288,177 @@ func TestSchema2CanChangeLayerCompression(t *testing.T) {
 	assert.True(t, m.CanChangeLayerCompression(DockerV2Schema2LayerMediaType))
 	// Some projects like to use squashfs and other unspecified formats for layers; don’t touch those.
 	assert.False(t, m.CanChangeLayerCompression("a completely unknown and quite possibly invalid MIME type"))
+}
+
+func TestSchema2HealthcheckFromConfigBlob(t *testing.T) {
+	configHealthcheck := &Schema2HealthConfig{
+		Test: []string{"CMD", "true"},
+	}
+	legacyHealthcheck := &Schema2HealthConfig{
+		Test: []string{"CMD", "false"},
+	}
+
+	tests := []struct {
+		name    string
+		blob    string
+		want    *Schema2HealthConfig
+		wantErr bool
+	}{
+		{
+			name: "healthcheck in config",
+			blob: `{
+				"config": {
+					"Healthcheck": {
+						"Test": ["CMD", "true"]
+					}
+				}
+			}`,
+			want: configHealthcheck,
+		},
+		{
+			name: "config healthcheck takes precedence",
+			blob: `{
+				"config": {
+					"Healthcheck": {
+						"Test": ["CMD", "true"]
+					}
+				},
+				"container_config": {
+					"Healthcheck": {
+						"Test": ["CMD", "false"]
+					}
+				}
+			}`,
+			want: configHealthcheck,
+		},
+		{
+			name: "legacy container_config fallback",
+			blob: `{
+				"container_config": {
+					"Healthcheck": {
+						"Test": ["CMD", "false"]
+					}
+				}
+			}`,
+			want: legacyHealthcheck,
+		},
+		{
+			name: "no fallback when config exists without healthcheck",
+			blob: `{
+				"config": {},
+				"container_config": {
+					"Healthcheck": {
+						"Test": ["CMD", "false"]
+					}
+				}
+			}`,
+		},
+		{
+			name: "no healthcheck",
+			blob: `{"config": {}, "container_config": {}}`,
+		},
+		{
+			name:    "invalid JSON",
+			blob:    `{`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Schema2HealthcheckFromConfigBlob([]byte(tt.blob))
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unexpected healthcheck:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSchema2V1ImageHealthcheck(t *testing.T) {
+	configHealthcheck := &Schema2HealthConfig{
+		Test: []string{"CMD", "true"},
+	}
+	legacyHealthcheck := &Schema2HealthConfig{
+		Test: []string{"CMD", "false"},
+	}
+
+	tests := []struct {
+		name  string
+		image *Schema2V1Image
+		want  *Schema2HealthConfig
+	}{
+		{
+			name: "healthcheck in config",
+			image: &Schema2V1Image{
+				Config: &Schema2Config{
+					Healthcheck: configHealthcheck,
+				},
+			},
+			want: configHealthcheck,
+		},
+		{
+			name: "config healthcheck takes precedence",
+			image: &Schema2V1Image{
+				Config: &Schema2Config{
+					Healthcheck: configHealthcheck,
+				},
+				ContainerConfig: Schema2Config{
+					Healthcheck: legacyHealthcheck,
+				},
+			},
+			want: configHealthcheck,
+		},
+		{
+			name: "legacy container_config fallback",
+			image: &Schema2V1Image{
+				ContainerConfig: Schema2Config{
+					Healthcheck: legacyHealthcheck,
+				},
+			},
+			want: legacyHealthcheck,
+		},
+		{
+			name: "no fallback when config exists without healthcheck",
+			image: &Schema2V1Image{
+				Config: &Schema2Config{},
+				ContainerConfig: Schema2Config{
+					Healthcheck: legacyHealthcheck,
+				},
+			},
+		},
+		{
+			name:  "no healthcheck",
+			image: &Schema2V1Image{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.image.Healthcheck()
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unexpected healthcheck:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil image", func(t *testing.T) {
+		var image *Schema2V1Image
+
+		if got := image.Healthcheck(); got != nil {
+			t.Errorf("expected nil healthcheck, got %#v", got)
+		}
+	})
 }
