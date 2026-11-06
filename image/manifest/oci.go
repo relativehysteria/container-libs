@@ -32,6 +32,39 @@ type OCI1 struct {
 	imgspecv1.Manifest
 }
 
+// OCIImageConfig is an OCI image configuration extended with the
+// Docker-compatible Healthcheck property.
+//
+// Healthcheck is not part of the standard OCI image configuration semantics.
+// containers/image nevertheless supports it as an implementation-specific
+// compatibility extension.
+type OCIImageConfig struct {
+	imgspecv1.ImageConfig
+	Healthcheck *Schema2HealthConfig `json:"Healthcheck,omitempty"`
+}
+
+// OCIImageExtended is an OCI image configuration whose config object also
+// preserves the Docker-compatible Healthcheck property.
+type OCIImageExtended struct {
+	imgspecv1.Image
+	Config OCIImageConfig `json:"config"`
+}
+
+// NewOCIImageExtended creates an extended OCI image config from an ordinary OCI
+// image and an optional healthcheck.
+func NewOCIImageExtended(
+	image imgspecv1.Image,
+	healthcheck *Schema2HealthConfig,
+) OCIImageExtended {
+	return OCIImageExtended{
+		Image: image,
+		Config: OCIImageConfig{
+			ImageConfig: image.Config,
+			Healthcheck: healthcheck,
+		},
+	}
+}
+
 // SupportedOCI1MediaType checks if the specified string is a supported OCI1
 // media type.
 //
@@ -219,6 +252,7 @@ func (m *OCI1) Inspect(configGetter func(types.BlobInfo) ([]byte, error)) (*type
 	if err := json.Unmarshal(config, d1); err != nil {
 		return nil, err
 	}
+
 	layerInfos := m.LayerInfos()
 	i := &types.ImageInspectInfo{
 		Tag:           "",

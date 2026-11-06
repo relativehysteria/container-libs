@@ -21,8 +21,7 @@ const (
 )
 
 // XattrHandle allows efficient llistxattr / llistxattr operations on a single file.
-type Handle struct {
-}
+type Handle struct{}
 
 // NewLHandle creates a Handle for fsBasename in parentRoot, which was the one last obtained from rootCache.
 // If fsBasename is a symbolic link, it refers to the symbolic link, not to the target.

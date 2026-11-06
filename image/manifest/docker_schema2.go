@@ -155,6 +155,45 @@ type Schema2Image struct {
 	OSFeatures []string         `json:"os.features,omitempty"`
 }
 
+// Healthcheck returns the image healthcheck, falling back to the legacy
+// ContainerConfig field only when Config is absent.
+func (i *Schema2V1Image) Healthcheck() *Schema2HealthConfig {
+	if i == nil {
+		return nil
+	}
+
+	if i.Config != nil {
+		return i.Config.Healthcheck
+	}
+
+	return i.ContainerConfig.Healthcheck
+}
+
+// Schema2HealthcheckFromConfigBlob extracts the healthcheck from an image
+// config blob without decoding unrelated Docker-specific fields. It prefers
+// config.Healthcheck and falls back to the legacy container_config.Healthcheck
+// only when config is absent.
+func Schema2HealthcheckFromConfigBlob(configBlob []byte) (*Schema2HealthConfig, error) {
+	type config struct {
+		Healthcheck *Schema2HealthConfig `json:"Healthcheck"`
+	}
+
+	var imageConfig struct {
+		Config          *config `json:"config"`
+		ContainerConfig config  `json:"container_config"`
+	}
+
+	if err := json.Unmarshal(configBlob, &imageConfig); err != nil {
+		return nil, err
+	}
+
+	if imageConfig.Config != nil {
+		return imageConfig.Config.Healthcheck, nil
+	}
+
+	return imageConfig.ContainerConfig.Healthcheck, nil
+}
+
 // Schema2FromManifest creates a Schema2 manifest instance from a manifest blob.
 func Schema2FromManifest(manifestBlob []byte) (*Schema2, error) {
 	s2 := Schema2{}
